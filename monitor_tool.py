@@ -3,33 +3,21 @@ import requests
 import time
 import boto3
 
-
 class MonitorIntrospectionTool(object):
-    SPARK_SUBMIT_STEP = \
-        {
-         'Jar':
-            ('s3://us-east-1.elasticmapreduce/libs/'
-             'script-runner/script-runner.jar'),
-         'Args':
-            ['/home/hadoop/spark/bin/spark-submit',
-             '--deploy-mode',
-             'cluster',
-             '--conf',
-             'k1=v1',
-             's3://mybucket/myfolder/app.jar',
-             'k2=v2'
-             ]
-        }
 
     def __init__(self):
         self.client = boto3.client('emr', region_name='us-east-1')
         print self.client
         self.job_flow_id = self.launch_cluster()
-        self.job_flow_DNS = None
+        #time.sleep(240)
+        #self.add_Jarfile()
         self.step_id = self.launch_step()
 
+    # send an http get request to the master cluster node to check if it is running
+    # status code 405: it is running
+    # exception: it is down
     def server_status(self):
-        monitor.job_flow_DNS = monitor.cluster_DNS()
+        self.job_flow_DNS = self.cluster_DNS()
         get_url = 'http://' + self.job_flow_DNS + ':3030/jobqueue'
         print get_url
         r = requests.get(get_url)
@@ -52,6 +40,7 @@ class MonitorIntrospectionTool(object):
         print response
         return response
 
+    # launch a cluster with a step and bootstrap action to install Spark
     def launch_cluster(self):
         self.job_flow_id = self.client.run_job_flow(
             Name='IntrospectionSparkOnEMRGhadir',
@@ -59,14 +48,18 @@ class MonitorIntrospectionTool(object):
             Instances={
                 'InstanceGroups': [
                     {
+                        'Market': 'SPOT',
                         'InstanceRole': 'MASTER',
+                        'BidPrice': '0.2',
                         'InstanceType': 'c3.xlarge',
                         'InstanceCount': 1
                     },
                     {
+                        'Market': 'SPOT',
                         'InstanceRole': 'CORE',
-                        'InstanceType': 'c3.2xlarge',
-                        'InstanceCount': 10
+                        'BidPrice': '0.2',
+                        'InstanceType': 'd2.2xlarge',
+                        'InstanceCount': 20
                     }
                 ],
                 'Ec2KeyName': 'ghadir',
@@ -92,27 +85,44 @@ class MonitorIntrospectionTool(object):
                 'ScriptBootstrapAction': {
                     'Path': 's3://support.elasticmapreduce/spark/install-spark'
                     }
-                }
+            },
+            {
+                'Name': 'Add Jar File',
+                'ScriptBootstrapAction': {
+                    'Path': 's3://ghadir.introspection-tool/add_Jarfile'
+                    }
+            }
             ],
             VisibleToAllUsers=True,
             JobFlowRole='EMR_EC2_DefaultRole',
-            ServiceRole='EMR_DefaultRole'
+            ServiceRole='EMR_DefaultRole',
+            Tags=[
+                {
+                    'Key': 'Owner',
+                    'Value': 'ghadir@cliqz.com'
+                },
+                {
+                    'Key': 'Project',
+                    'Value': 'Introspection'
+                }
+            ]
         )['JobFlowId']
         print self.job_flow_id
         return self.job_flow_id
 
+    # launch a Spark step
     def launch_step(self):
         self.step_id = self.client.add_job_flow_steps(
             JobFlowId=self.job_flow_id,
             Steps=[
                 {
-                    'Name': 'SparkStep',
+                    'Name': 'Spark Application',
                     'ActionOnFailure': 'CONTINUE',
                     'HadoopJarStep': {
-                        'Jar': 's3://zhonghao-emr-test/test/runnable.jar',
-                        'MainClass': 'introspection.api.SparklyApp',
+                        'Jar': 's3://elasticmapreduce/libs/script-runner/script-runner.jar',
                         'Args': [
-                            'client',
+                                '/home/hadoop/spark/bin/spark-submit', '--class', 'introspection.api.SparklyApp',
+                                '--deploy-mode','client', '/home/hadoop/runnable2.jar'
                         ]
                     }
                 },
@@ -135,6 +145,8 @@ if __name__ == '__main__':
             if step_status == 'CANCELLED' or step_status == 'FAILED' or step_status == 'INTERRUPTED':
                 if cluster_status == 'TERMINATING' or cluster_status == 'TERMINATED' or cluster_status == 'TERMINATED_WITH_ERRORS':
                     monitor.launch_cluster()
+                    #time.sleep(240)
+                    #monitor.add_Jarfile()
                     monitor.launch_step()
                 else:
                     monitor.launch_step()
